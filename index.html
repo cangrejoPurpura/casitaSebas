@@ -72,6 +72,13 @@
         <span id="loading-detail">Inicializando Three.js r128</span>
         <span id="loading-percent">8%</span>
       </div>
+      <div id="local-file-fallback" class="hidden mt-4 pt-3 border-t border-slate-800">
+        <p class="text-[11px] text-amber-300 mb-2">Si abriste el HTML con doble clic local (file://), selecciona el archivo <code class="font-mono text-white">casitaSebita.glb</code>:</p>
+        <label class="inline-flex items-center gap-2 px-3.5 py-2 rounded-xl bg-sky-500/20 border border-sky-400/40 text-sky-200 hover:bg-sky-500/30 text-xs font-semibold cursor-pointer transition">
+          <span>📂 Cargar casitaSebita.glb</span>
+          <input id="input-glb-file" type="file" accept=".glb" class="hidden" />
+        </label>
+      </div>
     </div>
   </div>
 
@@ -553,11 +560,11 @@ git push -u origin main</pre>
         }
       }
 
-      // Ruta estándar para GitHub Pages: carga ./casitaSebita.glb directamente del repositorio
+      // Ruta estándar para GitHub Pages: carga ./casitaSebita.glb con cache-busting para evitar caché corrupto
       det.textContent = "Descargando ./casitaSebita.glb...";
       return await new Promise((resolve, reject) => {
         const xhr = new XMLHttpRequest();
-        xhr.open("GET", "./casitaSebita.glb", true);
+        xhr.open("GET", "./casitaSebita.glb?v=2", true);
         xhr.responseType = "arraybuffer";
         xhr.onprogress = (ev) => {
           if (ev.lengthComputable) {
@@ -568,56 +575,179 @@ git push -u origin main</pre>
           }
         };
         xhr.onload = () => {
-          if (xhr.status >= 200 && xhr.status < 300) resolve(xhr.response);
-          else reject(new Error("HTTP " + xhr.status));
+          if ((xhr.status >= 200 && xhr.status < 300) || (xhr.status === 0 && xhr.response && xhr.response.byteLength > 0)) {
+            resolve(xhr.response);
+          } else {
+            reject(new Error("HTTP " + xhr.status));
+          }
         };
         xhr.onerror = () => reject(new Error("No se pudo cargar ./casitaSebita.glb"));
         xhr.send();
       });
     }
 
-    async function loadHouseModel() {
+    // Repara en memoria el chunk JSON del GLB si contiene índices fuera de rango en KHR_materials_pbrSpecularGlossiness
+    function sanitizeGlbArrayBuffer(arrayBuffer) {
+      try {
+        const dv = new DataView(arrayBuffer);
+        if (dv.byteLength < 20) return arrayBuffer;
+        const magic = dv.getUint32(0, true);
+        const version = dv.getUint32(4, true);
+        if (magic !== 0x46546C67 || version !== 2) return arrayBuffer;
+
+        const jsonLen = dv.getUint32(12, true);
+        const jsonType = dv.getUint32(16, true);
+        if (jsonType !== 0x4E4F534A) return arrayBuffer;
+
+        const jsonBytes = new Uint8Array(arrayBuffer, 20, jsonLen);
+        const jsonStr = new TextDecoder("utf-8").decode(jsonBytes);
+        const gltf = JSON.parse(jsonStr);
+
+        let modified = false;
+        const texCount = Array.isArray(gltf.textures) ? gltf.textures.length : 0;
+
+        if (Array.isArray(gltf.extensionsUsed)) {
+          const filtered = gltf.extensionsUsed.filter(e => e !== "KHR_materials_pbrSpecularGlossiness");
+          if (filtered.length !== gltf.extensionsUsed.length) {
+            if (filtered.length > 0) gltf.extensionsUsed = filtered;
+            else delete gltf.extensionsUsed;
+            modified = true;
+          }
+        }
+
+        if (Array.isArray(gltf.materials)) {
+          const metalKeys = ["steel", "metal", "chrome", "silver", "aluminum", "nickel", "gold", "mirror", "corrogated", "corrogate", "cromado"];
+          gltf.materials.forEach((mat) => {
+            if (!mat) return;
+            const pbr = mat.pbrMetallicRoughness || (mat.pbrMetallicRoughness = {});
+            if (mat.extensions && mat.extensions.KHR_materials_pbrSpecularGlossiness) {
+              const sg = mat.extensions.KHR_materials_pbrSpecularGlossiness;
+              if (sg.diffuseFactor && !pbr.baseColorFactor) {
+                pbr.baseColorFactor = sg.diffuseFactor;
+              }
+              if (sg.diffuseTexture && !pbr.baseColorTexture && sg.diffuseTexture.index < texCount) {
+                pbr.baseColorTexture = { index: sg.diffuseTexture.index };
+              }
+              delete mat.extensions.KHR_materials_pbrSpecularGlossiness;
+              if (Object.keys(mat.extensions).length === 0) delete mat.extensions;
+              modified = true;
+            }
+            if (pbr.baseColorTexture && (pbr.baseColorTexture.index == null || pbr.baseColorTexture.index >= texCount)) {
+              delete pbr.baseColorTexture;
+              modified = true;
+            }
+            const nameLower = (mat.name || "").toLowerCase();
+            if (pbr.metallicFactor === 0.5 && pbr.roughnessFactor === 0.5) {
+              if (nameLower.includes("mirror")) {
+                pbr.metallicFactor = 0.90; pbr.roughnessFactor = 0.06;
+              } else if (metalKeys.some(k => nameLower.includes(k))) {
+                pbr.metallicFactor = 0.70; pbr.roughnessFactor = 0.28;
+              } else {
+                pbr.metallicFactor = 0.04; pbr.roughnessFactor = 0.62;
+              }
+              modified = true;
+            }
+          });
+        }
+
+        if (!modified) return arrayBuffer;
+
+        const newJsonBytes = new TextEncoder().encode(JSON.stringify(gltf));
+        const pad = (4 - (newJsonBytes.byteLength % 4)) % 4;
+        const paddedJsonLen = newJsonBytes.byteLength + pad;
+        const binOffset = 20 + jsonLen;
+        const restByteLength = arrayBuffer.byteLength - binOffset;
+        const newTotalLen = 20 + paddedJsonLen + restByteLength;
+
+        const outBuffer = new ArrayBuffer(newTotalLen);
+        const outDv = new DataView(outBuffer);
+        const outBytes = new Uint8Array(outBuffer);
+
+        outDv.setUint32(0, 0x46546C67, true);
+        outDv.setUint32(4, 2, true);
+        outDv.setUint32(8, newTotalLen, true);
+        outDv.setUint32(12, paddedJsonLen, true);
+        outDv.setUint32(16, 0x4E4F534A, true);
+
+        outBytes.set(newJsonBytes, 20);
+        for (let i = 0; i < pad; i++) outBytes[20 + newJsonBytes.byteLength + i] = 0x20;
+        if (restByteLength > 0) {
+          outBytes.set(new Uint8Array(arrayBuffer, binOffset, restByteLength), 20 + paddedJsonLen);
+        }
+        return outBuffer;
+      } catch (e) {
+        console.warn("Aviso al sanitizar GLB:", e);
+        return arrayBuffer;
+      }
+    }
+
+    function parseAndInitGlbBuffer(rawArrayBuffer) {
       const bar = document.getElementById("loading-bar");
       const pct = document.getElementById("loading-percent");
       const det = document.getElementById("loading-detail");
       const status = document.getElementById("loading-status");
+      const fallbackBox = document.getElementById("local-file-fallback");
+      if (fallbackBox) fallbackBox.classList.add("hidden");
+
+      bar.style.width = "82%";
+      pct.textContent = "82%";
+      status.textContent = "Construyendo jerarquía 3D, bisagras y colisiones espaciales...";
+      det.textContent = "Validando y parseando glTF binario";
+
+      const cleanBuffer = sanitizeGlbArrayBuffer(rawArrayBuffer);
+      const loader = new THREE.GLTFLoader();
+      loader.parse(cleanBuffer, "", (gltf) => {
+        const model = gltf.scene;
+        scene.add(model);
+        model.updateMatrixWorld(true);
+
+        setupMaterialsAndRoof(model);
+        setupArticulatedDoorsAndDrawers(model);
+        buildSpatialCollisionGrid(model);
+        spawnInitialPhysicsProps();
+
+        bar.style.width = "100%";
+        pct.textContent = "100%";
+        det.textContent = "¡Modelo listo!";
+        setTimeout(() => {
+          const overlay = document.getElementById("loading-overlay");
+          overlay.classList.add("opacity-0", "pointer-events-none");
+          setTimeout(() => overlay.style.display = "none", 500);
+        }, 250);
+
+        animate();
+      }, (err) => {
+        console.error(err);
+        status.textContent = "Error al parsear casitaSebita.glb: " + (err && err.message ? err.message : String(err));
+      });
+    }
+
+    async function loadHouseModel() {
+      const det = document.getElementById("loading-detail");
+      const status = document.getElementById("loading-status");
+      const fallbackBox = document.getElementById("local-file-fallback");
+      const fileInput = document.getElementById("input-glb-file");
+
+      if (fileInput && !fileInput._bound) {
+        fileInput._bound = true;
+        fileInput.addEventListener("change", (ev) => {
+          const file = ev.target.files && ev.target.files[0];
+          if (!file) return;
+          det.textContent = "Leyendo " + file.name + "...";
+          const reader = new FileReader();
+          reader.onload = () => parseAndInitGlbBuffer(reader.result);
+          reader.readAsArrayBuffer(file);
+        });
+      }
 
       try {
         const arrayBuffer = await getModelArrayBuffer();
-        bar.style.width = "80%";
-        pct.textContent = "80%";
-        status.textContent = "Construyendo jerarquía 3D, bisagras y colisiones espaciales...";
-        det.textContent = "Parseando glTF binario";
-
-        const loader = new THREE.GLTFLoader();
-        loader.parse(arrayBuffer, "", (gltf) => {
-          const model = gltf.scene;
-          scene.add(model);
-          model.updateMatrixWorld(true);
-
-          setupMaterialsAndRoof(model);
-          setupArticulatedDoorsAndDrawers(model);
-          buildSpatialCollisionGrid(model);
-          spawnInitialPhysicsProps();
-
-          bar.style.width = "100%";
-          pct.textContent = "100%";
-          det.textContent = "¡Modelo listo!";
-          setTimeout(() => {
-            const overlay = document.getElementById("loading-overlay");
-            overlay.classList.add("opacity-0", "pointer-events-none");
-            setTimeout(() => overlay.style.display = "none", 500);
-          }, 250);
-
-          animate();
-        }, (err) => {
-          console.error(err);
-          status.textContent = "Error al parsear casitaSebita.glb: " + err.message;
-        });
+        parseAndInitGlbBuffer(arrayBuffer);
       } catch (err) {
         console.error(err);
         status.textContent = "Asegúrate de que casitaSebita.glb esté en la misma carpeta que index.html.";
         det.textContent = err.message;
+        if (fallbackBox) fallbackBox.classList.remove("hidden");
       }
     }
 
