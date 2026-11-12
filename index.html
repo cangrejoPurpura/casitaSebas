@@ -1,0 +1,1600 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
+  <title>Casita Sebita 3D — Recorrido Interactivo & Físicas (Three.js)</title>
+  <script src="https://cdn.tailwindcss.com/3.4.17"></script>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;600&display=swap" rel="stylesheet">
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/loaders/GLTFLoader.js"></script>
+  <style>
+    * { box-sizing: border-box; user-select: none; -webkit-user-select: none; }
+    html, body {
+      margin: 0; padding: 0; width: 100%; height: 100%;
+      overflow: hidden; background-color: #0b0f19;
+      font-family: 'Inter', sans-serif; color: #f8fafc;
+    }
+    #canvas-container {
+      position: absolute; inset: 0; width: 100%; height: 100%; z-index: 1;
+    }
+    .glass-panel {
+      background: rgba(15, 23, 42, 0.78);
+      backdrop-filter: blur(12px);
+      -webkit-backdrop-filter: blur(12px);
+      border: 1px solid rgba(148, 163, 184, 0.2);
+    }
+    .crosshair-ring {
+      transition: transform 0.15s ease, border-color 0.15s ease, background-color 0.15s ease;
+    }
+    .crosshair-active {
+      transform: scale(1.45);
+      border-color: #38bdf8 !important;
+      background-color: rgba(56, 189, 248, 0.25) !important;
+    }
+    .kbd-badge {
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 0.7rem;
+      padding: 0.12rem 0.38rem;
+      border-radius: 0.3rem;
+      background: rgba(30, 41, 59, 0.9);
+      border: 1px solid rgba(100, 116, 139, 0.45);
+      color: #e2e8f0;
+      box-shadow: 0 1px 2px rgba(0,0,0,0.4);
+    }
+    ::-webkit-scrollbar { width: 5px; height: 5px; }
+    ::-webkit-scrollbar-track { background: rgba(15, 23, 42, 0.4); }
+    ::-webkit-scrollbar-thumb { background: rgba(100, 116, 139, 0.5); border-radius: 9999px; }
+  </style>
+</head>
+<body class="relative w-full h-full overflow-hidden">
+
+  <!-- 3D Viewport -->
+  <div id="canvas-container"></div>
+
+  <!-- Loading Overlay -->
+  <div id="loading-overlay" class="fixed inset-0 z-50 flex flex-col items-center justify-center bg-slate-950/95 transition-opacity duration-500">
+    <div class="w-full max-w-md px-6 py-8 rounded-2xl glass-panel text-center shadow-2xl">
+      <div class="inline-flex items-center justify-center w-14 h-14 rounded-2xl bg-sky-500/15 border border-sky-400/30 text-sky-400 mb-4">
+        <svg class="w-8 h-8 animate-spin" viewBox="0 0 24 24" fill="none">
+          <circle class="opacity-20" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="3"></circle>
+          <path class="opacity-95" fill="currentColor" d="M4 12a8 8 0 018-8v3a5 5 0 00-5 5H4z"></path>
+        </svg>
+      </div>
+      <h1 class="text-xl font-bold tracking-tight text-white mb-1">Casita Sebita 3D</h1>
+      <p id="loading-status" class="text-xs text-slate-300 mb-4">Descomprimiendo modelo 3D y generando malla de colisiones...</p>
+      <div class="w-full h-2.5 bg-slate-800 rounded-full overflow-hidden border border-slate-700/60 mb-2">
+        <div id="loading-bar" class="h-full bg-gradient-to-r from-sky-500 to-emerald-400 transition-all duration-200" style="width: 8%;"></div>
+      </div>
+      <div class="flex justify-between text-[11px] font-mono text-slate-400">
+        <span id="loading-detail">Inicializando Three.js r128</span>
+        <span id="loading-percent">8%</span>
+      </div>
+    </div>
+  </div>
+
+  <!-- Center Crosshair & Interaction Prompt -->
+  <div id="hud-center" class="fixed inset-0 pointer-events-none z-20 flex flex-col items-center justify-center">
+    <div id="crosshair" class="crosshair-ring w-3.5 h-3.5 rounded-full border-2 border-white/80 bg-white/10 shadow-sm"></div>
+    <div id="interaction-prompt" class="hidden mt-4 px-3.5 py-1.5 rounded-full glass-panel text-xs font-medium text-sky-200 shadow-lg flex items-center gap-2">
+      <span class="kbd-badge">E</span>
+      <span id="interaction-text">Abrir puerta</span>
+    </div>
+  </div>
+
+  <!-- Top Navigation & Camera Teleport Bar -->
+  <header class="fixed top-3 left-3 right-3 z-30 flex flex-wrap items-center justify-between gap-2 pointer-events-none">
+    <!-- Brand + FPS + Coordinates -->
+    <div class="pointer-events-auto glass-panel px-3.5 py-2 rounded-xl flex items-center gap-3 shadow-lg">
+      <div class="flex items-center gap-2">
+        <span class="w-2.5 h-2.5 rounded-full bg-emerald-400 animate-pulse"></span>
+        <span class="font-bold text-sm tracking-tight text-white">Casita Sebita 3D</span>
+      </div>
+      <div class="h-4 w-px bg-slate-700"></div>
+      <div class="text-[11px] font-mono text-slate-300 flex items-center gap-2">
+        <span id="fps-readout" class="text-emerald-400 font-semibold">60 FPS</span>
+        <span class="hidden sm:inline text-slate-500">|</span>
+        <span id="pos-readout" class="hidden sm:inline text-slate-300">X: 22.8 Y: 1.7 Z: -8.4</span>
+      </div>
+    </div>
+
+    <!-- Quick Teleport Buttons -->
+    <div class="pointer-events-auto glass-panel p-1.5 rounded-xl flex items-center gap-1 overflow-x-auto max-w-full shadow-lg">
+      <button id="btn-cam-patio" class="px-2.5 py-1.5 rounded-lg text-xs font-medium bg-sky-500/20 text-sky-300 border border-sky-400/30 hover:bg-sky-500/30 transition whitespace-nowrap">
+        1. Entrada / Patio
+      </button>
+      <button id="btn-cam-living" class="px-2.5 py-1.5 rounded-lg text-xs font-medium text-slate-200 hover:bg-slate-800/80 transition whitespace-nowrap">
+        2. Living & TV
+      </button>
+      <button id="btn-cam-cocina" class="px-2.5 py-1.5 rounded-lg text-xs font-medium text-slate-200 hover:bg-slate-800/80 transition whitespace-nowrap">
+        3. Cocina Egger
+      </button>
+      <button id="btn-cam-habitacion" class="px-2.5 py-1.5 rounded-lg text-xs font-medium text-slate-200 hover:bg-slate-800/80 transition whitespace-nowrap">
+        4. Habitación Gamer
+      </button>
+      <button id="btn-cam-bano" class="px-2.5 py-1.5 rounded-lg text-xs font-medium text-slate-200 hover:bg-slate-800/80 transition whitespace-nowrap">
+        5. Baño
+      </button>
+      <button id="btn-cam-aerea" class="px-2.5 py-1.5 rounded-lg text-xs font-medium text-amber-300 hover:bg-amber-500/20 transition whitespace-nowrap">
+        6. Planta Libre
+      </button>
+    </div>
+
+    <!-- Action Controls Right -->
+    <div class="pointer-events-auto glass-panel p-1.5 rounded-xl flex items-center gap-1.5 shadow-lg">
+      <button id="btn-toggle-lights" title="Encender/Apagar Luces (Tecla L)" class="px-2.5 py-1.5 rounded-lg text-xs font-medium bg-amber-500/20 text-amber-300 border border-amber-400/30 hover:bg-amber-500/30 transition flex items-center gap-1">
+        <span>💡 Luces</span>
+      </button>
+      <button id="btn-toggle-flashlight" title="Linterna en cámara (Tecla T)" class="px-2.5 py-1.5 rounded-lg text-xs font-medium text-slate-200 hover:bg-slate-800 transition flex items-center gap-1">
+        <span>🔦 Linterna</span>
+      </button>
+      <button id="btn-toggle-roof" title="Ocultar/Mostrar Techo para ver desde arriba (Tecla C)" class="px-2.5 py-1.5 rounded-lg text-xs font-medium text-slate-200 hover:bg-slate-800 transition flex items-center gap-1">
+        <span>🏠 Techo</span>
+      </button>
+      <button id="btn-spawn-ball" title="Lanzar pelota con físicas (Tecla F)" class="px-2.5 py-1.5 rounded-lg text-xs font-medium bg-emerald-500/20 text-emerald-300 border border-emerald-400/30 hover:bg-emerald-500/30 transition flex items-center gap-1">
+        <span>⚽ Patear/Lanzar</span>
+      </button>
+      <button id="btn-github-modal" class="px-2.5 py-1.5 rounded-lg text-xs font-semibold bg-indigo-500/25 text-indigo-200 border border-indigo-400/30 hover:bg-indigo-500/40 transition flex items-center gap-1">
+        <span>🚀 GitHub Pages</span>
+      </button>
+      <button id="btn-settings-toggle" title="Panel de Físicas y Colisiones" class="p-1.5 rounded-lg text-slate-300 hover:text-white hover:bg-slate-800 transition">
+        <svg class="w-4 h-4" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+          <path stroke-linecap="round" stroke-linejoin="round" d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z"></path>
+          <path stroke-linecap="round" stroke-linejoin="round" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"></path>
+        </svg>
+      </button>
+    </div>
+  </header>
+
+  <!-- Right Collapsible Settings & Physics Panel -->
+  <aside id="settings-panel" class="fixed top-16 right-3 z-30 w-72 rounded-2xl glass-panel p-4 shadow-2xl transition-transform duration-200 translate-x-0">
+    <div class="flex items-center justify-between pb-2.5 mb-3 border-b border-slate-700/70">
+      <div>
+        <h2 class="text-xs font-bold uppercase tracking-wider text-sky-400">Físicas & Colisiones</h2>
+        <p class="text-[11px] text-slate-400">Motor espacial Octree/Grid + Cápsula</p>
+      </div>
+      <button id="btn-close-settings" class="text-slate-400 hover:text-white text-xs px-1.5 py-0.5 rounded bg-slate-800/80">✕</button>
+    </div>
+
+    <div class="space-y-3 text-xs">
+      <!-- Collision & Gravity Toggles -->
+      <div class="flex items-center justify-between">
+        <span class="text-slate-200">Colisiones con Paredes/Muebles</span>
+        <input id="chk-collisions" type="checkbox" checked class="w-4 h-4 accent-sky-400 rounded cursor-pointer" />
+      </div>
+      <div class="flex items-center justify-between">
+        <span class="text-slate-200">Gravedad Real (-18 m/s²)</span>
+        <input id="chk-gravity" type="checkbox" checked class="w-4 h-4 accent-sky-400 rounded cursor-pointer" />
+      </div>
+      <div class="flex items-center justify-between">
+        <span class="text-slate-200">Ver Malla Colisionadora (Wireframe)</span>
+        <input id="chk-wireframe" type="checkbox" class="w-4 h-4 accent-sky-400 rounded cursor-pointer" />
+      </div>
+
+      <!-- Sliders -->
+      <div>
+        <div class="flex justify-between text-[11px] mb-1">
+          <span class="text-slate-300">Altura de Ojos (m)</span>
+          <span id="lbl-eye-height" class="font-mono text-sky-300">1.68 m</span>
+        </div>
+        <input id="rng-eye-height" type="range" min="1.10" max="2.10" step="0.02" value="1.68" class="w-full accent-sky-400 cursor-pointer h-1.5 bg-slate-700 rounded-lg" />
+      </div>
+
+      <div>
+        <div class="flex justify-between text-[11px] mb-1">
+          <span class="text-slate-300">Velocidad al Caminar</span>
+          <span id="lbl-walk-speed" class="font-mono text-sky-300">3.4 m/s</span>
+        </div>
+        <input id="rng-walk-speed" type="range" min="1.5" max="7.0" step="0.1" value="3.4" class="w-full accent-sky-400 cursor-pointer h-1.5 bg-slate-700 rounded-lg" />
+      </div>
+
+      <div>
+        <div class="flex justify-between text-[11px] mb-1">
+          <span class="text-slate-300">Hora del Día (Luz Solar)</span>
+          <span id="lbl-sun-time" class="font-mono text-amber-300">15:30 hs</span>
+        </div>
+        <input id="rng-sun-time" type="range" min="6" max="22" step="0.5" value="15.5" class="w-full accent-amber-400 cursor-pointer h-1.5 bg-slate-700 rounded-lg" />
+      </div>
+
+      <div class="pt-2 border-t border-slate-700/70 flex gap-2">
+        <button id="btn-open-all" class="flex-1 py-1.5 px-2 rounded-lg bg-sky-500/20 border border-sky-400/30 text-sky-300 hover:bg-sky-500/30 font-medium transition">
+          Abrir Todo
+        </button>
+        <button id="btn-close-all" class="flex-1 py-1.5 px-2 rounded-lg bg-slate-800 border border-slate-700 text-slate-300 hover:bg-slate-700 font-medium transition">
+          Cerrar Todo
+        </button>
+      </div>
+
+      <!-- Interactive Stats -->
+      <div class="p-2.5 rounded-xl bg-slate-900/90 border border-slate-800 text-[11px] space-y-1 text-slate-300">
+        <div class="flex justify-between"><span>Triángulos colisión:</span><span id="stat-tris" class="font-mono text-emerald-400">0</span></div>
+        <div class="flex justify-between"><span>Puertas y alacenas:</span><span id="stat-doors" class="font-mono text-sky-300">7</span></div>
+        <div class="flex justify-between"><span>Cajones telescópicos:</span><span id="stat-drawers" class="font-mono text-sky-300">29</span></div>
+        <div class="flex justify-between"><span>Objetos con físicas:</span><span id="stat-props" class="font-mono text-amber-300">6</span></div>
+      </div>
+    </div>
+  </aside>
+
+  <!-- Bottom Controls Legend & Mobile Touch Joysticks -->
+  <div class="fixed bottom-3 left-3 right-3 z-20 flex items-end justify-between pointer-events-none">
+    <!-- Desktop Keyboard/Mouse Legend -->
+    <div id="controls-legend" class="pointer-events-auto glass-panel px-3.5 py-2.5 rounded-xl shadow-lg max-w-xl">
+      <div class="flex flex-wrap items-center gap-x-3 gap-y-1.5 text-[11px] text-slate-300">
+        <span><strong class="text-white">Clic en escena</strong> o Arrastrar: Mirar 360°</span>
+        <span><span class="kbd-badge">W</span><span class="kbd-badge">A</span><span class="kbd-badge">S</span><span class="kbd-badge">D</span> / Flechas: Caminar</span>
+        <span><span class="kbd-badge">Shift</span> Correr</span>
+        <span><span class="kbd-badge">Espacio</span> Saltar</span>
+        <span><span class="kbd-badge">Ctrl</span> Agacharse</span>
+        <span><span class="kbd-badge">E</span> / Clic: Abrir Puerta/Cajón</span>
+        <span><span class="kbd-badge">F</span> Lanzar pelota</span>
+      </div>
+    </div>
+
+    <!-- Mobile On-Screen Touch D-Pad -->
+    <div class="pointer-events-auto flex items-center gap-2 sm:hidden">
+      <div class="glass-panel p-2 rounded-2xl grid grid-cols-3 gap-1 w-32 h-32">
+        <div></div>
+        <button id="touch-up" class="rounded-lg bg-slate-800/90 active:bg-sky-500 text-white font-bold flex items-center justify-center">▲</button>
+        <div></div>
+        <button id="touch-left" class="rounded-lg bg-slate-800/90 active:bg-sky-500 text-white font-bold flex items-center justify-center">◀</button>
+        <button id="touch-action" class="rounded-lg bg-sky-500/30 border border-sky-400/50 text-sky-200 text-[10px] font-bold flex items-center justify-center">ABRIR</button>
+        <button id="touch-right" class="rounded-lg bg-slate-800/90 active:bg-sky-500 text-white font-bold flex items-center justify-center">▶</button>
+        <div></div>
+        <button id="touch-down" class="rounded-lg bg-slate-800/90 active:bg-sky-500 text-white font-bold flex items-center justify-center">▼</button>
+        <div></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Toast Notification -->
+  <div id="toast-msg" class="fixed bottom-16 left-1/2 -translate-x-1/2 z-40 px-4 py-2 rounded-full glass-panel text-xs font-medium text-emerald-300 shadow-xl opacity-0 pointer-events-none transition-opacity duration-300">
+    Listo
+  </div>
+
+  <!-- GitHub Pages Deployment Guide Modal -->
+  <div id="github-modal" class="hidden fixed inset-0 z-50 flex items-center justify-center bg-slate-950/80 p-4">
+    <div class="glass-panel w-full max-w-2xl rounded-2xl p-6 shadow-2xl border border-slate-700 max-h-[90vh] overflow-y-auto">
+      <div class="flex items-center justify-between pb-3 mb-4 border-b border-slate-700">
+        <div>
+          <h2 class="text-base font-bold text-white">Cómo subir Casita Sebita 3D a GitHub Pages</h2>
+          <p class="text-xs text-slate-400">Tu modelo fue optimizado de 69.7 MB a 12.3 MB para entrar directo sin Git LFS ni servidores externos</p>
+        </div>
+        <button id="btn-close-github-modal" class="px-2.5 py-1 rounded-lg bg-slate-800 text-slate-300 hover:text-white text-xs">Cerrar ✕</button>
+      </div>
+
+      <div class="space-y-4 text-xs text-slate-300 leading-relaxed">
+        <div class="p-3 rounded-xl bg-emerald-500/10 border border-emerald-500/30 text-emerald-200">
+          <strong>¡No necesitas configurar nada extra!</strong> Descarga el archivo <code class="font-mono text-white">casita_sebita_github_pages.zip</code> que te adjunté en el chat. Adentro ya están listos <code class="font-mono text-white">index.html</code>, <code class="font-mono text-white">casitaSebita.glb</code> (12.3 MB) y <code class="font-mono text-white">README.md</code>.
+        </div>
+
+        <ol class="list-decimal list-inside space-y-2">
+          <li>Crea un repositorio nuevo y público en <strong>github.com/new</strong> (por ejemplo <code class="font-mono text-sky-300">casita-sebita-3d</code>).</li>
+          <li>Descomprime el <code class="font-mono text-sky-300">.zip</code> en una carpeta de tu PC y sube los archivos arrastrándolos desde el navegador o ejecutando estos comandos en PowerShell/CMD:</li>
+        </ol>
+
+        <div class="relative">
+          <pre id="git-commands" class="p-3 rounded-xl bg-slate-950 border border-slate-800 font-mono text-[11px] text-sky-300 overflow-x-auto">git init
+git add index.html casitaSebita.glb README.md
+git commit -m "Subir espacio 3D Casita Sebita con colisiones y fisicas"
+git branch -M main
+git remote add origin https://github.com/TU_USUARIO/casita-sebita-3d.git
+git push -u origin main</pre>
+          <button id="btn-copy-git" class="absolute top-2 right-2 px-2.5 py-1 rounded-md bg-slate-800 hover:bg-slate-700 text-[11px] text-slate-200 border border-slate-600">
+            Copiar comandos
+          </button>
+        </div>
+
+        <p>3. En tu repositorio de GitHub entra a <strong>Settings → Pages</strong>, en <strong>Branch</strong> elige <code class="font-mono text-white">main</code> y carpeta <code class="font-mono text-white">/ (root)</code>, y pulsa <strong>Save</strong>. En 60 segundos tu casa estará online en <code class="font-mono text-emerald-300">https://tu_usuario.github.io/casita-sebita-3d/</code>.</p>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    // ============================================================================
+    // CONFIGURACIÓN DUAL: GITHUB PAGES (fetch './casitaSebita.glb') vs CANVAS B64
+    // ============================================================================
+    const EMBEDDED_GZ_B64 = "";
+
+    // Presets de cámara verificados sobre las coordenadas reales del modelo (en metros)
+    const CAMERA_PRESETS = {
+      patio:      { pos: [23.10, 1.68, -8.41],  yaw: Math.PI * 0.5,  pitch: 0.0,   label: "Entrada Principal / Patio" },
+      living:     { pos: [19.65, 1.68, -9.45],  yaw: Math.PI,        pitch: -0.05, label: "Living Comedor & Rack TV" },
+      cocina:     { pos: [19.20, 1.68, -12.35], yaw: 0.0,            pitch: -0.08, label: "Cocina Egger Pino Aland & Mesada" },
+      habitacion: { pos: [16.10, 1.68, -12.10], yaw: Math.PI,        pitch: -0.05, label: "Habitación & Setup PS5" },
+      bano:       { pos: [20.15, 1.68, -15.35], yaw: -Math.PI * 0.5, pitch: -0.10, label: "Baño & Vanitory" },
+      aerea:      { pos: [20.60, 8.90, -11.35], yaw: 0.0,            pitch: -1.35, label: "Vista Planta Libre (Techo Oculto)" }
+    };
+
+    // Definición exacta de puertas articuladas (coordenadas de bisagra verificadas del modelo SketchUp)
+    const DOOR_CONFIGS = {
+      "Door_Main_Entry":         { hinge: [21.25, 1.12, -8.03],  axis: "y", angle: -Math.PI * 0.48, label: "Puerta Principal de Entrada" },
+      "Door_Room_CocoBolo":      { hinge: [17.84, 1.08, -9.89],  axis: "y", angle:  Math.PI * 0.46, label: "Puerta Habitación (Coco Bolo)" },
+      "Door_Bath_CocoBolo":      { hinge: [20.56, 1.03, -16.05], axis: "y", angle: -Math.PI * 0.46, label: "Puerta Baño (Coco Bolo)" },
+      "CabinetDoor_Alacena_Top": { hinge: [19.05, 2.44, -14.00], axis: "x", angle: -Math.PI * 0.42, label: "Alacena Superior (Pino Aland Polar)" },
+      "CabinetDoor_Alacena_Bot": { hinge: [19.05, 1.99, -14.00], axis: "x", angle: -Math.PI * 0.42, label: "Alacena Inferior (Pino Aland Polar)" },
+      "CabinetDoor_Rack1_Roble": { hinge: [20.92, 1.46, -6.46],  axis: "y", angle: -Math.PI * 0.45, label: "Puerta Vertical Rack Living (Roble Kaisersberg)" },
+      "CabinetDoor_Rack2_Formica": { hinge: [17.04, 1.46, -10.04], axis: "y", angle: -Math.PI * 0.45, label: "Puerta Vertical Rack Habitación" }
+    };
+
+    // Definición de los 29 cajones con correderas telescópicas
+    const DRAWER_PREFIXES = [
+      { prefix: "Drawer_Kitchen_", dir: [0, 0,  0.42], label: "Cajón Bajo Mesada Cocina" },
+      { prefix: "Drawer_Rack1_",   dir: [0, 0, -0.32], label: "Cajón Rack TV Living" },
+      { prefix: "Drawer_Tower_",   dir: [0, 0, -0.32], label: "Cajón Torre Living" },
+      { prefix: "Drawer_Rack2_",   dir: [0, 0, -0.32], label: "Cajón Rack TV Habitación" },
+      { prefix: "Drawer_Bath_",    dir: [-0.36, 0, 0], label: "Cajón Vanitory Baño" }
+    ];
+
+    // Estado global de la aplicación
+    const state = {
+      collisionsEnabled: true,
+      gravityEnabled: true,
+      wireframeEnabled: false,
+      lightsOn: true,
+      flashlightOn: false,
+      roofVisible: true,
+      eyeHeight: 1.68,
+      crouchHeight: 1.00,
+      isCrouching: false,
+      walkSpeed: 3.4,
+      sprintMultiplier: 1.65,
+      radius: 0.27,
+      stepHeight: 0.28,
+      gravity: 18.0,
+      jumpSpeed: 5.8,
+      onGround: false,
+      velocity: new THREE.Vector3(),
+      yaw: Math.PI * 0.5,
+      pitch: 0.0,
+      keys: { forward: false, backward: false, left: false, right: false, sprint: false },
+      pointerLocked: false,
+      isDraggingLook: false,
+      prevMouse: { x: 0, y: 0 },
+      hoveredInteractive: null,
+      allOpened: false
+    };
+
+    let scene, camera, renderer, clock;
+    let ambientLight, hemiLight, sunLight, flashlight;
+    const housePointLights = [];
+    const roofNodes = [];
+    const interactiveObjects = []; // { id, type: 'door'|'drawer', pivotOrNode, label, isOpen, progress, targetProgress, config, aabb }
+    const meshToInteractive = new Map();
+    const dynamicBalls = [];
+    let colliderWireframeGroup = null;
+
+    // Hash espacial 2D para colisiones rápidas contra los triángulos reales del modelo
+    const GRID_CELL_SIZE = 0.75;
+    const spatialGrid = new Map();
+    let totalColliderTriangles = 0;
+
+    function showToast(text) {
+      const el = document.getElementById("toast-msg");
+      if (!el) return;
+      el.textContent = text;
+      el.classList.remove("opacity-0");
+      el.classList.add("opacity-100");
+      clearTimeout(showToast._timer);
+      showToast._timer = setTimeout(() => {
+        el.classList.remove("opacity-100");
+        el.classList.add("opacity-0");
+      }, 2400);
+    }
+
+    // Sintetizador Web Audio API sin archivos externos para pasos, puertas, cajones y rebotes
+    let audioCtx = null;
+    function playSound(type) {
+      try {
+        if (!audioCtx) {
+          const AC = window.AudioContext || window.webkitAudioContext;
+          if (!AC) return;
+          audioCtx = new AC();
+        }
+        if (audioCtx.state === "suspended") audioCtx.resume();
+        const now = audioCtx.currentTime;
+        const osc = audioCtx.createOscillator();
+        const gain = audioCtx.createGain();
+        osc.connect(gain);
+        gain.connect(audioCtx.destination);
+
+        if (type === "door") {
+          osc.type = "triangle";
+          osc.frequency.setValueAtTime(140, now);
+          osc.frequency.exponentialRampToValueAtTime(220, now + 0.18);
+          gain.gain.setValueAtTime(0.08, now);
+          gain.gain.exponentialRampToValueAtTime(0.001, now + 0.20);
+          osc.start(now);
+          osc.stop(now + 0.20);
+        } else if (type === "drawer") {
+          osc.type = "sine";
+          osc.frequency.setValueAtTime(190, now);
+          osc.frequency.exponentialRampToValueAtTime(110, now + 0.16);
+          gain.gain.setValueAtTime(0.07, now);
+          gain.gain.exponentialRampToValueAtTime(0.001, now + 0.17);
+          osc.start(now);
+          osc.stop(now + 0.17);
+        } else if (type === "bounce") {
+          osc.type = "sine";
+          osc.frequency.setValueAtTime(120, now);
+          osc.frequency.exponentialRampToValueAtTime(55, now + 0.11);
+          gain.gain.setValueAtTime(0.09, now);
+          gain.gain.exponentialRampToValueAtTime(0.001, now + 0.12);
+          osc.start(now);
+          osc.stop(now + 0.12);
+        } else if (type === "switch") {
+          osc.type = "square";
+          osc.frequency.setValueAtTime(520, now);
+          gain.gain.setValueAtTime(0.04, now);
+          gain.gain.exponentialRampToValueAtTime(0.001, now + 0.05);
+          osc.start(now);
+          osc.stop(now + 0.05);
+        }
+      } catch (e) {}
+    }
+
+    // Inicialización de escena Three.js
+    function initScene() {
+      const container = document.getElementById("canvas-container");
+      scene = new THREE.Scene();
+      scene.background = new THREE.Color(0x1e293b);
+      scene.fog = new THREE.FogExp2(0x1e293b, 0.015);
+
+      camera = new THREE.PerspectiveCamera(68, window.innerWidth / window.innerHeight, 0.08, 120);
+      camera.rotation.order = "YXZ";
+      teleportToPreset("patio", false);
+
+      renderer = new THREE.WebGLRenderer({ antialias: true, powerPreference: "high-performance" });
+      renderer.setSize(window.innerWidth, window.innerHeight);
+      renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+      renderer.outputEncoding = THREE.sRGBEncoding;
+      renderer.toneMapping = THREE.ACESFilmicToneMapping;
+      renderer.toneMappingExposure = 1.1;
+      renderer.shadowMap.enabled = true;
+      renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+      container.appendChild(renderer.domElement);
+
+      // Iluminación atmosférica y solar
+      ambientLight = new THREE.AmbientLight(0xffffff, 0.55);
+      scene.add(ambientLight);
+
+      hemiLight = new THREE.HemisphereLight(0xdbeafe, 0x334155, 0.55);
+      hemiLight.position.set(20, 12, -11);
+      scene.add(hemiLight);
+
+      sunLight = new THREE.DirectionalLight(0xfffbeb, 1.15);
+      sunLight.position.set(32, 18, -2);
+      sunLight.castShadow = true;
+      sunLight.shadow.mapSize.width = 2048;
+      sunLight.shadow.mapSize.height = 2048;
+      sunLight.shadow.camera.near = 1;
+      sunLight.shadow.camera.far = 45;
+      const d = 14;
+      sunLight.shadow.camera.left = -d;
+      sunLight.shadow.camera.right = d;
+      sunLight.shadow.camera.top = d;
+      sunLight.shadow.camera.bottom = -d;
+      sunLight.target.position.set(20.6, 0, -11.35);
+      scene.add(sunLight);
+      scene.add(sunLight.target);
+
+      // Linterna acoplada a la cámara
+      flashlight = new THREE.SpotLight(0xffffff, 0.0, 14, Math.PI / 5, 0.35, 1.5);
+      camera.add(flashlight);
+      flashlight.position.set(0, 0, 0);
+      flashlight.target.position.set(0, 0, -1);
+      camera.add(flashlight.target);
+      scene.add(camera);
+
+      // Piso exterior de entorno alrededor del lote para poder caminar fuera de la casa sin caer al vacío
+      const groundGeo = new THREE.PlaneGeometry(80, 80);
+      const groundMat = new THREE.MeshStandardMaterial({ color: 0x1e293b, roughness: 0.92, metalness: 0.05 });
+      const groundMesh = new THREE.Mesh(groundGeo, groundMat);
+      groundMesh.rotation.x = -Math.PI / 2;
+      groundMesh.position.set(20.6, -0.015, -11.35);
+      groundMesh.receiveShadow = true;
+      scene.add(groundMesh);
+
+      // Grilla sutil de referencia en el terreno exterior
+      const gridHelper = new THREE.GridHelper(60, 60, 0x38bdf8, 0x334155);
+      gridHelper.position.set(20.6, -0.01, -11.35);
+      gridHelper.material.opacity = 0.25;
+      gridHelper.material.transparent = true;
+      scene.add(gridHelper);
+
+      // Luces interiores cálidas (4000K neutro/cálido en Living, Cocina, Habitación y Baño)
+      const lightCoords = [
+        [19.5, 2.38, -8.5, 0.75],   // Living Comedor
+        [19.1, 2.38, -13.3, 0.75],  // Cocina
+        [16.3, 2.38, -12.1, 0.75],  // Habitación
+        [20.2, 2.38, -15.2, 0.60],  // Baño
+        [23.8, 2.38, -14.7, 0.65]   // Galería / Patio
+      ];
+      lightCoords.forEach(([lx, ly, lz, intensity]) => {
+        const pl = new THREE.PointLight(0xfff4e0, intensity, 7.5, 1.6);
+        pl.position.set(lx, ly, lz);
+        scene.add(pl);
+        housePointLights.push({ light: pl, baseIntensity: intensity });
+      });
+
+      clock = new THREE.Clock();
+      setupInputHandlers();
+      loadHouseModel();
+    }
+
+    // Descompresión del modelo GLB si está embebido en Gzip+Base64 (Canvas) o carga por fetch('./casitaSebita.glb') en GitHub Pages
+    async function getModelArrayBuffer() {
+      const bar = document.getElementById("loading-bar");
+      const pct = document.getElementById("loading-percent");
+      const det = document.getElementById("loading-detail");
+
+      if (EMBEDDED_GZ_B64 && !EMBEDDED_GZ_B64.startsWith("__EMBEDDED")) {
+        det.textContent = "Decodificando casitaSebita.glb en memoria...";
+        bar.style.width = "35%";
+        pct.textContent = "35%";
+        await new Promise(r => setTimeout(r, 30));
+
+        const binStr = atob(EMBEDDED_GZ_B64);
+        const len = binStr.length;
+        const bytes = new Uint8Array(len);
+        for (let i = 0; i < len; i++) bytes[i] = binStr.charCodeAt(i);
+
+        if (typeof DecompressionStream !== "undefined") {
+          det.textContent = "Descomprimiendo stream GZIP...";
+          bar.style.width = "60%";
+          pct.textContent = "60%";
+          const ds = new DecompressionStream("gzip");
+          const writer = ds.writable.getWriter();
+          writer.write(bytes);
+          writer.close();
+          const resp = new Response(ds.readable);
+          return await resp.arrayBuffer();
+        }
+      }
+
+      // Ruta estándar para GitHub Pages: carga ./casitaSebita.glb directamente del repositorio
+      det.textContent = "Descargando ./casitaSebita.glb...";
+      return await new Promise((resolve, reject) => {
+        const xhr = new XMLHttpRequest();
+        xhr.open("GET", "./casitaSebita.glb", true);
+        xhr.responseType = "arraybuffer";
+        xhr.onprogress = (ev) => {
+          if (ev.lengthComputable) {
+            const p = Math.round((ev.loaded / ev.total) * 75) + 10;
+            bar.style.width = p + "%";
+            pct.textContent = p + "%";
+            det.textContent = `Descargado ${(ev.loaded / 1048576).toFixed(1)} / ${(ev.total / 1048576).toFixed(1)} MB`;
+          }
+        };
+        xhr.onload = () => {
+          if (xhr.status >= 200 && xhr.status < 300) resolve(xhr.response);
+          else reject(new Error("HTTP " + xhr.status));
+        };
+        xhr.onerror = () => reject(new Error("No se pudo cargar ./casitaSebita.glb"));
+        xhr.send();
+      });
+    }
+
+    async function loadHouseModel() {
+      const bar = document.getElementById("loading-bar");
+      const pct = document.getElementById("loading-percent");
+      const det = document.getElementById("loading-detail");
+      const status = document.getElementById("loading-status");
+
+      try {
+        const arrayBuffer = await getModelArrayBuffer();
+        bar.style.width = "80%";
+        pct.textContent = "80%";
+        status.textContent = "Construyendo jerarquía 3D, bisagras y colisiones espaciales...";
+        det.textContent = "Parseando glTF binario";
+
+        const loader = new THREE.GLTFLoader();
+        loader.parse(arrayBuffer, "", (gltf) => {
+          const model = gltf.scene;
+          scene.add(model);
+          model.updateMatrixWorld(true);
+
+          setupMaterialsAndRoof(model);
+          setupArticulatedDoorsAndDrawers(model);
+          buildSpatialCollisionGrid(model);
+          spawnInitialPhysicsProps();
+
+          bar.style.width = "100%";
+          pct.textContent = "100%";
+          det.textContent = "¡Modelo listo!";
+          setTimeout(() => {
+            const overlay = document.getElementById("loading-overlay");
+            overlay.classList.add("opacity-0", "pointer-events-none");
+            setTimeout(() => overlay.style.display = "none", 500);
+          }, 250);
+
+          animate();
+        }, (err) => {
+          console.error(err);
+          status.textContent = "Error al parsear casitaSebita.glb: " + err.message;
+        });
+      } catch (err) {
+        console.error(err);
+        status.textContent = "Asegúrate de que casitaSebita.glb esté en la misma carpeta que index.html.";
+        det.textContent = err.message;
+      }
+    }
+
+    function setupMaterialsAndRoof(model) {
+      model.traverse((obj) => {
+        if (obj.name === "Ceiling_Main" || obj.name.startsWith("Roof_Slats_") || obj.name.startsWith("SpotLED_")) {
+          roofNodes.push(obj);
+        }
+        if (obj.isMesh) {
+          obj.castShadow = true;
+          obj.receiveShadow = true;
+          if (obj.material) {
+            obj.material.side = THREE.DoubleSide;
+            const matName = (obj.material.name || "").toLowerCase();
+            if (matName.includes("glass") || matName.includes("translucent")) {
+              obj.material.transparent = true;
+              obj.material.opacity = 0.32;
+              obj.material.roughness = 0.1;
+              obj.material.metalness = 0.2;
+            } else if (matName.includes("mirror")) {
+              obj.material.roughness = 0.05;
+              obj.material.metalness = 0.9;
+            }
+          }
+        }
+      });
+    }
+
+    // Configura pivotes reales en coordenadas de mundo para puertas y correderas para cajones
+    function setupArticulatedDoorsAndDrawers(model) {
+      const foundNodes = [];
+      model.traverse((obj) => {
+        if (!obj.name) return;
+        if (DOOR_CONFIGS[obj.name]) {
+          foundNodes.push({ obj, type: "door", cfg: DOOR_CONFIGS[obj.name] });
+        } else {
+          for (const d of DRAWER_PREFIXES) {
+            if (obj.name.startsWith(d.prefix)) {
+              foundNodes.push({ obj, type: "drawer", cfg: d });
+              break;
+            }
+          }
+        }
+      });
+
+      let doorCount = 0;
+      let drawerCount = 0;
+
+      foundNodes.forEach(({ obj, type, cfg }) => {
+        obj.updateMatrixWorld(true);
+        const box = new THREE.Box3().setFromObject(obj);
+
+        if (type === "door") {
+          doorCount++;
+          // Crear un grupo Pivot en la coordenada exacta de la bisagra en el mundo
+          const hingeWorld = new THREE.Vector3(cfg.hinge[0], cfg.hinge[1], cfg.hinge[2]);
+          const parent = obj.parent;
+          parent.updateMatrixWorld(true);
+
+          const pivot = new THREE.Group();
+          pivot.name = "Pivot_" + obj.name;
+          parent.add(pivot);
+
+          // Posicionar el pivot en coordenadas locales del padre equivalentes a hingeWorld
+          const hingeLocal = parent.worldToLocal(hingeWorld.clone());
+          pivot.position.copy(hingeLocal);
+          pivot.updateMatrixWorld(true);
+
+          // Re-emparentar el objeto de la puerta dentro del pivot preservando su transformación mundial
+          pivot.attach(obj);
+
+          const item = {
+            id: obj.name,
+            type: "door",
+            node: pivot,
+            label: cfg.label,
+            isOpen: false,
+            progress: 0,
+            targetProgress: 0,
+            axis: cfg.axis,
+            maxAngle: cfg.angle,
+            baseRot: pivot.rotation.clone(),
+            worldBox: box
+          };
+          interactiveObjects.push(item);
+          pivot.traverse((child) => {
+            if (child.isMesh) meshToInteractive.set(child, item);
+          });
+        } else if (type === "drawer") {
+          drawerCount++;
+          // Calcular el desplazamiento en el espacio local del padre equivalente al vector de apertura mundial
+          const parent = obj.parent;
+          parent.updateMatrixWorld(true);
+          const originWorld = new THREE.Vector3();
+          obj.getWorldPosition(originWorld);
+          const targetWorld = originWorld.clone().add(new THREE.Vector3(cfg.dir[0], cfg.dir[1], cfg.dir[2]));
+
+          const startLocal = obj.position.clone();
+          const endLocal = parent.worldToLocal(targetWorld.clone());
+          const deltaLocal = endLocal.sub(parent.worldToLocal(originWorld.clone()));
+
+          const item = {
+            id: obj.name,
+            type: "drawer",
+            node: obj,
+            label: cfg.label,
+            isOpen: false,
+            progress: 0,
+            targetProgress: 0,
+            startPos: startLocal,
+            deltaPos: deltaLocal,
+            worldBox: box
+          };
+          interactiveObjects.push(item);
+          obj.traverse((child) => {
+            if (child.isMesh) meshToInteractive.set(child, item);
+          });
+        }
+      });
+
+      document.getElementById("stat-doors").textContent = String(doorCount);
+      document.getElementById("stat-drawers").textContent = String(drawerCount);
+    }
+
+    // Construye el índice espacial 2D de triángulos para colisiones exactas en tiempo real
+    function buildSpatialCollisionGrid(model) {
+      spatialGrid.clear();
+      totalColliderTriangles = 0;
+
+      const wirePositions = [];
+      const vA = new THREE.Vector3();
+      const vB = new THREE.Vector3();
+      const vC = new THREE.Vector3();
+
+      model.updateMatrixWorld(true);
+      model.traverse((obj) => {
+        if (!obj.isMesh || !obj.geometry) return;
+
+        // Excluir objetos pequeños meramente decorativos (mandos DualSense, hojas de plantas, spots de techo)
+        const box = new THREE.Box3().setFromObject(obj);
+        const sz = new THREE.Vector3();
+        box.getSize(sz);
+        if (sz.x < 0.08 && sz.y < 0.08 && sz.z < 0.08) return;
+        if (box.min.y > 2.35) return; // No colisionar la cápsula contra spots del techo
+
+        const interactiveItem = meshToInteractive.get(obj);
+        const geom = obj.geometry;
+        const posAttr = geom.attributes.position;
+        if (!posAttr) return;
+        const indexAttr = geom.index;
+        const matWorld = obj.matrixWorld;
+
+        const triCount = indexAttr ? (indexAttr.count / 3) : (posAttr.count / 3);
+        // Si es un adorno de alta densidad (> 3000 triángulos), usamos sus 12 triángulos de caja delimitadora (AABB) para mantener 60 FPS clavados
+        if (triCount > 2500) {
+          addBoxTrianglesToGrid(box, interactiveItem, wirePositions);
+          return;
+        }
+
+        for (let i = 0; i < triCount; i++) {
+          const i0 = indexAttr ? indexAttr.getX(i * 3) : i * 3;
+          const i1 = indexAttr ? indexAttr.getX(i * 3 + 1) : i * 3 + 1;
+          const i2 = indexAttr ? indexAttr.getX(i * 3 + 2) : i * 3 + 2;
+
+          vA.fromBufferAttribute(posAttr, i0).applyMatrix4(matWorld);
+          vB.fromBufferAttribute(posAttr, i1).applyMatrix4(matWorld);
+          vC.fromBufferAttribute(posAttr, i2).applyMatrix4(matWorld);
+
+          registerTriangleInGrid(vA, vB, vC, interactiveItem, wirePositions);
+        }
+      });
+
+      // Agregar también un piso base bajo el patio/exterior (Y = 0)
+      const extBox = new THREE.Box3(new THREE.Vector3(10, -0.1, -22), new THREE.Vector3(32, 0.0, -2));
+      addBoxTrianglesToGrid(extBox, null, wirePositions);
+
+      // Crear malla visualizadora de colisiones (modo Wireframe opcional)
+      const wireGeo = new THREE.BufferGeometry();
+      wireGeo.setAttribute("position", new THREE.Float32BufferAttribute(wirePositions, 3));
+      const wireMat = new THREE.LineBasicMaterial({ color: 0x38bdf8, transparent: true, opacity: 0.35 });
+      colliderWireframeGroup = new THREE.LineSegments(wireGeo, wireMat);
+      colliderWireframeGroup.visible = state.wireframeEnabled;
+      scene.add(colliderWireframeGroup);
+
+      document.getElementById("stat-tris").textContent = totalColliderTriangles.toLocaleString("es-AR");
+    }
+
+    function addBoxTrianglesToGrid(box, interactiveItem, wirePositions) {
+      const { min, max } = box;
+      const p = [
+        new THREE.Vector3(min.x, min.y, min.z),
+        new THREE.Vector3(max.x, min.y, min.z),
+        new THREE.Vector3(max.x, max.y, min.z),
+        new THREE.Vector3(min.x, max.y, min.z),
+        new THREE.Vector3(min.x, min.y, max.z),
+        new THREE.Vector3(max.x, min.y, max.z),
+        new THREE.Vector3(max.x, max.y, max.z),
+        new THREE.Vector3(min.x, max.y, max.z)
+      ];
+      const faces = [
+        [0,1,2], [0,2,3], [4,6,5], [4,7,6],
+        [0,4,5], [0,5,1], [3,2,6], [3,6,7],
+        [0,3,7], [0,7,4], [1,5,6], [1,6,2]
+      ];
+      faces.forEach(([a, b, c]) => {
+        registerTriangleInGrid(p[a], p[b], p[c], interactiveItem, wirePositions);
+      });
+    }
+
+    function registerTriangleInGrid(vA, vB, vC, interactiveItem, wirePositions) {
+      const e1 = new THREE.Vector3().subVectors(vB, vA);
+      const e2 = new THREE.Vector3().subVectors(vC, vA);
+      const normal = new THREE.Vector3().crossVectors(e1, e2);
+      const lenSq = normal.lengthSq();
+      if (lenSq < 1e-8) return;
+      normal.divideScalar(Math.sqrt(lenSq));
+
+      const tri = {
+        a: vA.clone(),
+        b: vB.clone(),
+        c: vC.clone(),
+        n: normal,
+        minY: Math.min(vA.y, vB.y, vC.y),
+        maxY: Math.max(vA.y, vB.y, vC.y),
+        interactiveItem: interactiveItem || null
+      };
+      totalColliderTriangles++;
+
+      if (wirePositions.length < 90000) {
+        wirePositions.push(vA.x, vA.y, vA.z, vB.x, vB.y, vB.z);
+        wirePositions.push(vB.x, vB.y, vB.z, vC.x, vC.y, vC.z);
+        wirePositions.push(vC.x, vC.y, vC.z, vA.x, vA.y, vA.z);
+      }
+
+      const minGX = Math.floor(Math.min(vA.x, vB.x, vC.x) / GRID_CELL_SIZE);
+      const maxGX = Math.floor(Math.max(vA.x, vB.x, vC.x) / GRID_CELL_SIZE);
+      const minGZ = Math.floor(Math.min(vA.z, vB.z, vC.z) / GRID_CELL_SIZE);
+      const maxGZ = Math.floor(Math.max(vA.z, vB.z, vC.z) / GRID_CELL_SIZE);
+
+      for (let gx = minGX; gx <= maxGX; gx++) {
+        for (let gz = minGZ; gz <= maxGZ; gz++) {
+          const key = gx + "," + gz;
+          let bucket = spatialGrid.get(key);
+          if (!bucket) {
+            bucket = [];
+            spatialGrid.set(key, bucket);
+          }
+          bucket.push(tri);
+        }
+      }
+    }
+
+    // Punto más cercano en el triángulo ABC desde el punto P
+    const _vab = new THREE.Vector3();
+    const _vac = new THREE.Vector3();
+    const _vap = new THREE.Vector3();
+    const _vbp = new THREE.Vector3();
+    const _vcp = new THREE.Vector3();
+
+    function closestPointOnTriangle(p, a, b, c, target) {
+      _vab.subVectors(b, a);
+      _vac.subVectors(c, a);
+      _vap.subVectors(p, a);
+      const d1 = _vab.dot(_vap);
+      const d2 = _vac.dot(_vap);
+      if (d1 <= 0 && d2 <= 0) return target.copy(a);
+
+      _vbp.subVectors(p, b);
+      const d3 = _vab.dot(_vbp);
+      const d4 = _vac.dot(_vbp);
+      if (d3 >= 0 && d4 <= d3) return target.copy(b);
+
+      const vc = d1 * d4 - d3 * d2;
+      if (vc <= 0 && d1 >= 0 && d3 <= 0) {
+        const v = d1 / (d1 - d3);
+        return target.copy(a).addScaledVector(_vab, v);
+      }
+
+      _vcp.subVectors(p, c);
+      const d5 = _vab.dot(_vcp);
+      const d6 = _vac.dot(_vcp);
+      if (d6 >= 0 && d5 <= d6) return target.copy(c);
+
+      const vb = d5 * d2 - d1 * d6;
+      if (vb <= 0 && d2 >= 0 && d6 <= 0) {
+        const w = d2 / (d2 - d6);
+        return target.copy(a).addScaledVector(_vac, w);
+      }
+
+      const va = d3 * d6 - d5 * d4;
+      if (va <= 0 && (d4 - d3) >= 0 && (d5 - d6) >= 0) {
+        const w = (d4 - d3) / ((d4 - d3) + (d5 - d6));
+        return target.copy(b).addScaledVector(_vcp.subVectors(c, b), w);
+      }
+
+      const denom = 1.0 / (va + vb + vc);
+      const v = vb * denom;
+      const w = vc * denom;
+      return target.copy(a).addScaledVector(_vab, v).addScaledVector(_vac, w);
+    }
+
+    function getNearbyTriangles(x, z, radius) {
+      const minGX = Math.floor((x - radius) / GRID_CELL_SIZE);
+      const maxGX = Math.floor((x + radius) / GRID_CELL_SIZE);
+      const minGZ = Math.floor((z - radius) / GRID_CELL_SIZE);
+      const maxGZ = Math.floor((z + radius) / GRID_CELL_SIZE);
+      const result = new Set();
+      for (let gx = minGX; gx <= maxGX; gx++) {
+        for (let gz = minGZ; gz <= maxGZ; gz++) {
+          const bucket = spatialGrid.get(gx + "," + gz);
+          if (bucket) {
+            for (let i = 0; i < bucket.length; i++) result.add(bucket[i]);
+          }
+        }
+      }
+      return result;
+    }
+
+    // Objetos dinámicos con físicas lógicas (pelotas de fútbol y cubos de prueba en la mesada)
+    function spawnInitialPhysicsProps() {
+      // Pelota de fútbol N°5 en el living y otra en el patio de entrada
+      createPhysicsBall(new THREE.Vector3(22.10, 0.80, -8.40), new THREE.Vector3(0, 0, 0), 0.14);
+      createPhysicsBall(new THREE.Vector3(19.40, 0.80, -10.20), new THREE.Vector3(0, 0, 0), 0.14);
+      // Cubos interactivos de melamina sobre la mesada y mesa comedor
+      createPhysicsCube(new THREE.Vector3(19.55, 1.05, -8.20), 0.14, 0x38bdf8);
+      createPhysicsCube(new THREE.Vector3(19.05, 1.15, -14.20), 0.13, 0xf59e0b);
+      document.getElementById("stat-props").textContent = String(dynamicBalls.length);
+    }
+
+    function createPhysicsBall(pos, vel, radius = 0.13) {
+      const geo = new THREE.IcosahedronGeometry(radius, 2);
+      const mat = new THREE.MeshStandardMaterial({
+        color: 0xf8fafc,
+        roughness: 0.35,
+        metalness: 0.1,
+        wireframe: false
+      });
+      const mesh = new THREE.Mesh(geo, mat);
+      // Agregar líneas pentagonales de pelota de fútbol
+      const wire = new THREE.LineSegments(
+        new THREE.EdgesGeometry(new THREE.IcosahedronGeometry(radius * 1.003, 1)),
+        new THREE.LineBasicMaterial({ color: 0x0f172a })
+      );
+      mesh.add(wire);
+      mesh.position.copy(pos);
+      mesh.castShadow = true;
+      mesh.receiveShadow = true;
+      scene.add(mesh);
+
+      dynamicBalls.push({
+        mesh,
+        radius,
+        velocity: vel.clone(),
+        restitution: 0.68,
+        friction: 0.985
+      });
+      if (dynamicBalls.length > 14) {
+        const old = dynamicBalls.shift();
+        scene.remove(old.mesh);
+      }
+      document.getElementById("stat-props").textContent = String(dynamicBalls.length);
+    }
+
+    function createPhysicsCube(pos, size, hexColor) {
+      const geo = new THREE.BoxGeometry(size, size, size);
+      const mat = new THREE.MeshStandardMaterial({ color: hexColor, roughness: 0.4, metalness: 0.15 });
+      const mesh = new THREE.Mesh(geo, mat);
+      mesh.position.copy(pos);
+      mesh.castShadow = true;
+      mesh.receiveShadow = true;
+      scene.add(mesh);
+
+      dynamicBalls.push({
+        mesh,
+        radius: size * 0.55,
+        velocity: new THREE.Vector3(),
+        restitution: 0.42,
+        friction: 0.95
+      });
+    }
+
+    function shootPhysicsBallFromCamera() {
+      const dir = new THREE.Vector3(0, 0, -1).applyQuaternion(camera.quaternion).normalize();
+      const startPos = camera.position.clone().addScaledVector(dir, 0.55);
+      startPos.y -= 0.15;
+      const vel = dir.multiplyScalar(7.5);
+      vel.y += 1.6;
+      createPhysicsBall(startPos, vel, 0.13);
+      playSound("bounce");
+      showToast("⚽ Pelota lanzada con físicas y rebote");
+    }
+
+    // Actualización de física del jugador (Cápsula de 3 esferas apiladas vs triángulos del modelo)
+    const _closestPt = new THREE.Vector3();
+    const _pushVec = new THREE.Vector3();
+
+    function updatePlayerPhysics(dt) {
+      const targetEye = state.isCrouching ? state.crouchHeight : state.eyeHeight;
+      const speed = state.walkSpeed * (state.keys.sprint ? state.sprintMultiplier : 1.0);
+
+      // Dirección horizontal según yaw de la cámara
+      const forward = new THREE.Vector3(-Math.sin(state.yaw), 0, -Math.cos(state.yaw));
+      const right = new THREE.Vector3(Math.cos(state.yaw), 0, -Math.sin(state.yaw));
+
+      const moveDir = new THREE.Vector3();
+      if (state.keys.forward) moveDir.add(forward);
+      if (state.keys.backward) moveDir.sub(forward);
+      if (state.keys.right) moveDir.add(right);
+      if (state.keys.left) moveDir.sub(right);
+      if (moveDir.lengthSq() > 0) moveDir.normalize();
+
+      if (!state.collisionsEnabled) {
+        // Modo vuelo libre sin colisiones
+        const flyForward = new THREE.Vector3(0, 0, -1).applyQuaternion(camera.quaternion);
+        const flyMove = new THREE.Vector3();
+        if (state.keys.forward) flyMove.add(flyForward);
+        if (state.keys.backward) flyMove.sub(flyForward);
+        if (state.keys.right) flyMove.add(right);
+        if (state.keys.left) flyMove.sub(right);
+        if (flyMove.lengthSq() > 0) flyMove.normalize();
+        camera.position.addScaledVector(flyMove, speed * 1.4 * dt);
+        return;
+      }
+
+      state.velocity.x = moveDir.x * speed;
+      state.velocity.z = moveDir.z * speed;
+
+      if (state.gravityEnabled) {
+        state.velocity.y -= state.gravity * dt;
+        if (state.velocity.y < -22) state.velocity.y = -22;
+      } else {
+        state.velocity.y = 0;
+      }
+
+      // Sub-stepping para evitar atravesar paredes delgadas de 18mm o 10cm a alta velocidad
+      const subSteps = 3;
+      const subDt = dt / subSteps;
+
+      for (let step = 0; step < subSteps; step++) {
+        camera.position.addScaledVector(state.velocity, subDt);
+
+        const feetY = camera.position.y - targetEye;
+        const r = state.radius;
+        const nearby = getNearbyTriangles(camera.position.x, camera.position.z, r + 0.35);
+
+        state.onGround = false;
+
+        // Centros de esfera de la cápsula (Pies/Rodillas, Cintura y Cabeza)
+        const sphereOffsets = [
+          r + state.stepHeight,
+          targetEye * 0.55,
+          targetEye - r * 0.4
+        ];
+
+        nearby.forEach((tri) => {
+          // Si el triángulo pertenece a una puerta o cajón que está abierto, no bloquear el paso
+          if (tri.interactiveItem && tri.interactiveItem.progress > 0.25) return;
+
+          // 1. Detección de piso / escalón bajo los pies
+          if (tri.n.y > 0.55 && tri.maxY >= feetY - 0.12 && tri.minY <= feetY + state.stepHeight + 0.08) {
+            const testFoot = new THREE.Vector3(camera.position.x, feetY + 0.15, camera.position.z);
+            closestPointOnTriangle(testFoot, tri.a, tri.b, tri.c, _closestPt);
+            const dx = testFoot.x - _closestPt.x;
+            const dz = testFoot.z - _closestPt.z;
+            if (dx * dx + dz * dz < r * r * 0.75) {
+              if (_closestPt.y >= feetY - 0.06 && _closestPt.y <= feetY + state.stepHeight && state.velocity.y <= 0.1) {
+                camera.position.y = _closestPt.y + targetEye;
+                state.velocity.y = 0;
+                state.onGround = true;
+              }
+            }
+          }
+
+          // 2. Colisión lateral contra paredes, mesadas, muebles y marcos
+          if (tri.maxY < feetY + state.stepHeight + 0.04 || tri.minY > camera.position.y + 0.15) return;
+
+          for (let s = 0; s < sphereOffsets.length; s++) {
+            const center = new THREE.Vector3(camera.position.x, feetY + sphereOffsets[s], camera.position.z);
+            closestPointOnTriangle(center, tri.a, tri.b, tri.c, _closestPt);
+            _pushVec.subVectors(center, _closestPt);
+            // Priorizar resolución horizontal para paredes verticales
+            if (Math.abs(tri.n.y) < 0.45) {
+              _pushVec.y = 0;
+            }
+            const distSq = _pushVec.lengthSq();
+            if (distSq < r * r && distSq > 1e-8) {
+              const dist = Math.sqrt(distSq);
+              const penetration = r - dist;
+              _pushVec.divideScalar(dist);
+              camera.position.x += _pushVec.x * penetration;
+              camera.position.z += _pushVec.z * penetration;
+              if (_pushVec.y < -0.5 && state.velocity.y > 0) {
+                state.velocity.y = 0;
+              }
+            }
+          }
+        });
+
+        // Piso mínimo de seguridad (nivel terreno = 0.0m)
+        if (camera.position.y < targetEye) {
+          camera.position.y = targetEye;
+          state.velocity.y = 0;
+          state.onGround = true;
+        }
+      }
+
+      // Empujar objetos dinámicos si el jugador camina hacia ellos
+      const playerFeet = new THREE.Vector3(camera.position.x, camera.position.y - targetEye + 0.25, camera.position.z);
+      dynamicBalls.forEach((b) => {
+        const diff = new THREE.Vector3().subVectors(b.mesh.position, playerFeet);
+        diff.y *= 0.4;
+        const minDist = state.radius + b.radius + 0.08;
+        const dSq = diff.lengthSq();
+        if (dSq < minDist * minDist && dSq > 1e-6) {
+          const d = Math.sqrt(dSq);
+          diff.divideScalar(d);
+          b.velocity.x += diff.x * 3.8;
+          b.velocity.z += diff.z * 3.8;
+          b.velocity.y = Math.max(b.velocity.y, 1.4);
+          playSound("bounce");
+        }
+      });
+    }
+
+    // Actualiza la física de pelotas y objetos sueltos contra el mundo y entre sí
+    function updateDynamicPropsPhysics(dt) {
+      for (let i = 0; i < dynamicBalls.length; i++) {
+        const b = dynamicBalls[i];
+        b.velocity.y -= state.gravity * dt;
+        b.mesh.position.addScaledVector(b.velocity, dt);
+        b.mesh.rotation.x += b.velocity.z * dt * 2.5;
+        b.mesh.rotation.z -= b.velocity.x * dt * 2.5;
+
+        const nearby = getNearbyTriangles(b.mesh.position.x, b.mesh.position.z, b.radius + 0.2);
+        nearby.forEach((tri) => {
+          if (tri.interactiveItem && tri.interactiveItem.progress > 0.25) return;
+          if (b.mesh.position.y + b.radius < tri.minY || b.mesh.position.y - b.radius > tri.maxY) return;
+
+          closestPointOnTriangle(b.mesh.position, tri.a, tri.b, tri.c, _closestPt);
+          _pushVec.subVectors(b.mesh.position, _closestPt);
+          const dSq = _pushVec.lengthSq();
+          if (dSq < b.radius * b.radius && dSq > 1e-8) {
+            const d = Math.sqrt(dSq);
+            const pen = b.radius - d;
+            _pushVec.divideScalar(d);
+            b.mesh.position.addScaledVector(_pushVec, pen);
+
+            const vn = b.velocity.dot(_pushVec);
+            if (vn < 0) {
+              b.velocity.addScaledVector(_pushVec, -(1 + b.restitution) * vn);
+              b.velocity.x *= b.friction;
+              b.velocity.z *= b.friction;
+              if (Math.abs(vn) > 1.8) playSound("bounce");
+            }
+          }
+        });
+
+        if (b.mesh.position.y < b.radius) {
+          b.mesh.position.y = b.radius;
+          if (b.velocity.y < 0) {
+            if (Math.abs(b.velocity.y) > 1.8) playSound("bounce");
+            b.velocity.y = -b.velocity.y * b.restitution;
+            b.velocity.x *= b.friction;
+            b.velocity.z *= b.friction;
+          }
+        }
+      }
+    }
+
+    // Animación suave de puertas sobre sus bisagras y cajones sobre sus correderas
+    function updateInteractiveAnimations(dt) {
+      interactiveObjects.forEach((item) => {
+        if (Math.abs(item.progress - item.targetProgress) > 0.001) {
+          const step = dt * 3.2;
+          if (item.progress < item.targetProgress) {
+            item.progress = Math.min(item.targetProgress, item.progress + step);
+          } else {
+            item.progress = Math.max(item.targetProgress, item.progress - step);
+          }
+          // Ease in-out cúbico
+          const t = item.progress < 0.5
+            ? 4 * item.progress * item.progress * item.progress
+            : 1 - Math.pow(-2 * item.progress + 2, 3) / 2;
+
+          if (item.type === "door") {
+            item.node.rotation.copy(item.baseRot);
+            item.node.rotation[item.axis] = item.baseRot[item.axis] + item.maxAngle * t;
+          } else if (item.type === "drawer") {
+            item.node.position.copy(item.startPos).addScaledVector(item.deltaPos, t);
+          }
+        }
+      });
+    }
+
+    // Raycaster central para detectar qué puerta o cajón está mirando el usuario
+    const raycaster = new THREE.Raycaster();
+    const screenCenter = new THREE.Vector2(0, 0);
+
+    function updateInteractionRaycast() {
+      raycaster.setFromCamera(screenCenter, camera);
+      raycaster.far = 3.0;
+
+      const meshes = Array.from(meshToInteractive.keys());
+      const hits = raycaster.intersectObjects(meshes, false);
+      const crosshair = document.getElementById("crosshair");
+      const prompt = document.getElementById("interaction-prompt");
+      const promptText = document.getElementById("interaction-text");
+
+      if (hits.length > 0) {
+        const item = meshToInteractive.get(hits[0].object);
+        if (item) {
+          state.hoveredInteractive = item;
+          crosshair.classList.add("crosshair-active");
+          prompt.classList.remove("hidden");
+          const actionVerb = item.isOpen ? "Cerrar" : "Abrir";
+          promptText.textContent = `${actionVerb} ${item.label}`;
+          return;
+        }
+      }
+
+      state.hoveredInteractive = null;
+      crosshair.classList.remove("crosshair-active");
+      prompt.classList.add("hidden");
+    }
+
+    function triggerHoveredInteraction() {
+      if (!state.hoveredInteractive) return false;
+      const item = state.hoveredInteractive;
+      item.isOpen = !item.isOpen;
+      item.targetProgress = item.isOpen ? 1.0 : 0.0;
+      playSound(item.type === "door" ? "door" : "drawer");
+      showToast(`${item.isOpen ? "Abriendo" : "Cerrando"} ${item.label}`);
+      return true;
+    }
+
+    function teleportToPreset(key, notify = true) {
+      const p = CAMERA_PRESETS[key];
+      if (!p) return;
+      camera.position.set(p.pos[0], p.pos[1], p.pos[2]);
+      state.velocity.set(0, 0, 0);
+      state.yaw = p.yaw;
+      state.pitch = p.pitch;
+      camera.rotation.y = state.yaw;
+      camera.rotation.x = state.pitch;
+
+      if (key === "aerea" && state.roofVisible) {
+        toggleRoofVisibility(false);
+      } else if (key !== "aerea" && !state.roofVisible) {
+        toggleRoofVisibility(true);
+      }
+
+      if (notify) showToast("📍 " + p.label);
+    }
+
+    function toggleRoofVisibility(forceState) {
+      state.roofVisible = typeof forceState === "boolean" ? forceState : !state.roofVisible;
+      roofNodes.forEach((n) => { n.visible = state.roofVisible; });
+      const btn = document.getElementById("btn-toggle-roof");
+      if (btn) {
+        btn.className = state.roofVisible
+          ? "px-2.5 py-1.5 rounded-lg text-xs font-medium text-slate-200 hover:bg-slate-800 transition flex items-center gap-1"
+          : "px-2.5 py-1.5 rounded-lg text-xs font-medium bg-sky-500/25 text-sky-300 border border-sky-400/40 transition flex items-center gap-1";
+      }
+    }
+
+    function toggleHouseLights() {
+      state.lightsOn = !state.lightsOn;
+      housePointLights.forEach((item) => {
+        item.light.intensity = state.lightsOn ? item.baseIntensity : 0.0;
+      });
+      playSound("switch");
+      const btn = document.getElementById("btn-toggle-lights");
+      if (btn) {
+        btn.className = state.lightsOn
+          ? "px-2.5 py-1.5 rounded-lg text-xs font-medium bg-amber-500/20 text-amber-300 border border-amber-400/30 hover:bg-amber-500/30 transition flex items-center gap-1"
+          : "px-2.5 py-1.5 rounded-lg text-xs font-medium text-slate-400 hover:bg-slate-800 transition flex items-center gap-1";
+      }
+      showToast(state.lightsOn ? "💡 Luces interiores encendidas" : "🌑 Luces interiores apagadas");
+    }
+
+    function toggleFlashlight() {
+      state.flashlightOn = !state.flashlightOn;
+      flashlight.intensity = state.flashlightOn ? 1.8 : 0.0;
+      playSound("switch");
+      const btn = document.getElementById("btn-toggle-flashlight");
+      if (btn) {
+        btn.className = state.flashlightOn
+          ? "px-2.5 py-1.5 rounded-lg text-xs font-medium bg-sky-500/25 text-sky-300 border border-sky-400/40 transition flex items-center gap-1"
+          : "px-2.5 py-1.5 rounded-lg text-xs font-medium text-slate-200 hover:bg-slate-800 transition flex items-center gap-1";
+      }
+      showToast(state.flashlightOn ? "🔦 Linterna activada" : "🔦 Linterna apagada");
+    }
+
+    function updateSunTime(hourFloat) {
+      const angle = ((hourFloat - 6) / 16) * Math.PI; // 6hs a 22hs
+      const radius = 26;
+      const sx = 20.6 + Math.cos(angle) * radius;
+      const sy = Math.max(0.5, Math.sin(angle) * 20);
+      const sz = -11.35 + Math.cos(angle * 0.7) * 12;
+      sunLight.position.set(sx, sy, sz);
+
+      const dayFactor = Math.max(0, Math.sin(angle));
+      sunLight.intensity = 0.15 + dayFactor * 1.15;
+      ambientLight.intensity = 0.22 + dayFactor * 0.42;
+      hemiLight.intensity = 0.20 + dayFactor * 0.45;
+
+      const skyColor = new THREE.Color().lerpColors(new THREE.Color(0x090d16), new THREE.Color(0x38bdf8), dayFactor * 0.65);
+      scene.background.copy(skyColor);
+      scene.fog.color.copy(skyColor);
+    }
+
+    // Eventos de teclado, mouse (PointerLock + Drag fallback para iframe) y botones UI
+    function setupInputHandlers() {
+      const domEl = renderer.domElement;
+
+      domEl.addEventListener("mousedown", (e) => {
+        if (e.button !== 0) return;
+        state.isDraggingLook = true;
+        state.prevMouse.x = e.clientX;
+        state.prevMouse.y = e.clientY;
+
+        if (!state.pointerLocked && domEl.requestPointerLock) {
+          try { domEl.requestPointerLock(); } catch (err) {}
+        }
+      });
+
+      window.addEventListener("mouseup", (e) => {
+        if (state.isDraggingLook) {
+          const moved = Math.hypot(e.clientX - state.prevMouse.x, e.clientY - state.prevMouse.y);
+          if (moved < 5) {
+            triggerHoveredInteraction();
+          }
+        }
+        state.isDraggingLook = false;
+      });
+
+      document.addEventListener("pointerlockchange", () => {
+        state.pointerLocked = (document.pointerLockElement === domEl);
+      });
+
+      window.addEventListener("mousemove", (e) => {
+        const sensitivity = 0.0022;
+        if (state.pointerLocked) {
+          state.yaw -= e.movementX * sensitivity;
+          state.pitch -= e.movementY * sensitivity;
+        } else if (state.isDraggingLook) {
+          const dx = e.clientX - state.prevMouse.x;
+          const dy = e.clientY - state.prevMouse.y;
+          state.prevMouse.x = e.clientX;
+          state.prevMouse.y = e.clientY;
+          state.yaw -= dx * sensitivity * 1.4;
+          state.pitch -= dy * sensitivity * 1.4;
+        } else {
+          return;
+        }
+        const maxPitch = Math.PI * 0.47;
+        state.pitch = Math.max(-maxPitch, Math.min(maxPitch, state.pitch));
+        camera.rotation.y = state.yaw;
+        camera.rotation.x = state.pitch;
+      });
+
+      // Touch look en pantallas móviles
+      let touchLookId = null;
+      let prevTouchX = 0, prevTouchY = 0;
+      domEl.addEventListener("touchstart", (e) => {
+        if (e.touches.length > 0) {
+          const t = e.touches[0];
+          touchLookId = t.identifier;
+          prevTouchX = t.clientX;
+          prevTouchY = t.clientY;
+        }
+      }, { passive: true });
+
+      domEl.addEventListener("touchmove", (e) => {
+        for (let i = 0; i < e.touches.length; i++) {
+          const t = e.touches[i];
+          if (t.identifier === touchLookId) {
+            const dx = t.clientX - prevTouchX;
+            const dy = t.clientY - prevTouchY;
+            prevTouchX = t.clientX;
+            prevTouchY = t.clientY;
+            state.yaw -= dx * 0.004;
+            state.pitch = Math.max(-1.4, Math.min(1.4, state.pitch - dy * 0.004));
+            camera.rotation.y = state.yaw;
+            camera.rotation.x = state.pitch;
+          }
+        }
+      }, { passive: true });
+
+      window.addEventListener("keydown", (e) => {
+        switch (e.code) {
+          case "KeyW": case "ArrowUp":    state.keys.forward = true; break;
+          case "KeyS": case "ArrowDown":  state.keys.backward = true; break;
+          case "KeyA": case "ArrowLeft":  state.keys.left = true; break;
+          case "KeyD": case "ArrowRight": state.keys.right = true; break;
+          case "ShiftLeft": case "ShiftRight": state.keys.sprint = true; break;
+          case "ControlLeft": case "ControlRight": case "KeyC":
+            if (e.code === "KeyC" && !e.ctrlKey) {
+              toggleRoofVisibility();
+            } else {
+              state.isCrouching = true;
+            }
+            break;
+          case "Space":
+            if (state.onGround || !state.gravityEnabled) {
+              state.velocity.y = state.jumpSpeed;
+              state.onGround = false;
+            }
+            break;
+          case "KeyE": triggerHoveredInteraction(); break;
+          case "KeyF": shootPhysicsBallFromCamera(); break;
+          case "KeyL": toggleHouseLights(); break;
+          case "KeyT": toggleFlashlight(); break;
+          case "Digit1": teleportToPreset("patio"); break;
+          case "Digit2": teleportToPreset("living"); break;
+          case "Digit3": teleportToPreset("cocina"); break;
+          case "Digit4": teleportToPreset("habitacion"); break;
+          case "Digit5": teleportToPreset("bano"); break;
+          case "Digit6": teleportToPreset("aerea"); break;
+        }
+      });
+
+      window.addEventListener("keyup", (e) => {
+        switch (e.code) {
+          case "KeyW": case "ArrowUp":    state.keys.forward = false; break;
+          case "KeyS": case "ArrowDown":  state.keys.backward = false; break;
+          case "KeyA": case "ArrowLeft":  state.keys.left = false; break;
+          case "KeyD": case "ArrowRight": state.keys.right = false; break;
+          case "ShiftLeft": case "ShiftRight": state.keys.sprint = false; break;
+          case "ControlLeft": case "ControlRight": state.isCrouching = false; break;
+        }
+      });
+
+      window.addEventListener("resize", () => {
+        camera.aspect = window.innerWidth / window.innerHeight;
+        camera.updateProjectionMatrix();
+        renderer.setSize(window.innerWidth, window.innerHeight);
+      });
+
+      // Botones de teletransporte
+      const camBtns = [
+        ["btn-cam-patio", "patio"],
+        ["btn-cam-living", "living"],
+        ["btn-cam-cocina", "cocina"],
+        ["btn-cam-habitacion", "habitacion"],
+        ["btn-cam-bano", "bano"],
+        ["btn-cam-aerea", "aerea"]
+      ];
+      camBtns.forEach(([btnId, presetKey]) => {
+        document.getElementById(btnId).addEventListener("click", () => teleportToPreset(presetKey));
+      });
+
+      // Controles superiores y laterales
+      document.getElementById("btn-toggle-lights").addEventListener("click", toggleHouseLights);
+      document.getElementById("btn-toggle-flashlight").addEventListener("click", toggleFlashlight);
+      document.getElementById("btn-toggle-roof").addEventListener("click", () => toggleRoofVisibility());
+      document.getElementById("btn-spawn-ball").addEventListener("click", shootPhysicsBallFromCamera);
+
+      const settingsPanel = document.getElementById("settings-panel");
+      document.getElementById("btn-settings-toggle").addEventListener("click", () => {
+        settingsPanel.classList.toggle("translate-x-[120%]");
+      });
+      document.getElementById("btn-close-settings").addEventListener("click", () => {
+        settingsPanel.classList.add("translate-x-[120%]");
+      });
+
+      document.getElementById("chk-collisions").addEventListener("change", (e) => {
+        state.collisionsEnabled = e.target.checked;
+        showToast(state.collisionsEnabled ? "Colisiones sólidas activadas" : "Modo vuelo libre (sin colisiones)");
+      });
+      document.getElementById("chk-gravity").addEventListener("change", (e) => {
+        state.gravityEnabled = e.target.checked;
+      });
+      document.getElementById("chk-wireframe").addEventListener("change", (e) => {
+        state.wireframeEnabled = e.target.checked;
+        if (colliderWireframeGroup) colliderWireframeGroup.visible = state.wireframeEnabled;
+      });
+
+      document.getElementById("rng-eye-height").addEventListener("input", (e) => {
+        state.eyeHeight = parseFloat(e.target.value);
+        document.getElementById("lbl-eye-height").textContent = state.eyeHeight.toFixed(2) + " m";
+      });
+      document.getElementById("rng-walk-speed").addEventListener("input", (e) => {
+        state.walkSpeed = parseFloat(e.target.value);
+        document.getElementById("lbl-walk-speed").textContent = state.walkSpeed.toFixed(1) + " m/s";
+      });
+      document.getElementById("rng-sun-time").addEventListener("input", (e) => {
+        const val = parseFloat(e.target.value);
+        const hh = Math.floor(val);
+        const mm = (val % 1) >= 0.5 ? "30" : "00";
+        document.getElementById("lbl-sun-time").textContent = `${String(hh).padStart(2, "0")}:${mm} hs`;
+        updateSunTime(val);
+      });
+
+      document.getElementById("btn-open-all").addEventListener("click", () => {
+        interactiveObjects.forEach((it) => { it.isOpen = true; it.targetProgress = 1.0; });
+        playSound("door");
+        showToast("Todas las puertas y cajones abiertos");
+      });
+      document.getElementById("btn-close-all").addEventListener("click", () => {
+        interactiveObjects.forEach((it) => { it.isOpen = false; it.targetProgress = 0.0; });
+        playSound("drawer");
+        showToast("Todas las puertas y cajones cerrados");
+      });
+
+      // Modal GitHub Pages
+      const ghModal = document.getElementById("github-modal");
+      document.getElementById("btn-github-modal").addEventListener("click", () => ghModal.classList.remove("hidden"));
+      document.getElementById("btn-close-github-modal").addEventListener("click", () => ghModal.classList.add("hidden"));
+      document.getElementById("btn-copy-git").addEventListener("click", () => {
+        const text = document.getElementById("git-commands").textContent;
+        if (navigator.clipboard && navigator.clipboard.writeText) {
+          navigator.clipboard.writeText(text).catch(() => fallbackCopy(text));
+        } else {
+          fallbackCopy(text);
+        }
+        showToast("📋 Comandos Git copiados al portapapeles");
+      });
+
+      // Controles táctiles móviles
+      const bindHold = (id, keyName) => {
+        const el = document.getElementById(id);
+        if (!el) return;
+        const start = (ev) => { ev.preventDefault(); state.keys[keyName] = true; };
+        const end = (ev) => { ev.preventDefault(); state.keys[keyName] = false; };
+        el.addEventListener("touchstart", start, { passive: false });
+        el.addEventListener("touchend", end, { passive: false });
+        el.addEventListener("mousedown", start);
+        el.addEventListener("mouseup", end);
+        el.addEventListener("mouseleave", end);
+      };
+      bindHold("touch-up", "forward");
+      bindHold("touch-down", "backward");
+      bindHold("touch-left", "left");
+      bindHold("touch-right", "right");
+      document.getElementById("touch-action").addEventListener("click", () => {
+        if (!triggerHoveredInteraction()) shootPhysicsBallFromCamera();
+      });
+    }
+
+    function fallbackCopy(text) {
+      const ta = document.createElement("textarea");
+      ta.value = text;
+      document.body.appendChild(ta);
+      ta.select();
+      try { document.execCommand("copy"); } catch (e) {}
+      document.body.removeChild(ta);
+    }
+
+    // Loop principal de renderizado y simulación física
+    let frameCount = 0;
+    let fpsAccum = 0;
+
+    function animate() {
+      requestAnimationFrame(animate);
+      const dt = Math.min(clock.getDelta(), 0.05);
+
+      updatePlayerPhysics(dt);
+      updateDynamicPropsPhysics(dt);
+      updateInteractiveAnimations(dt);
+      updateInteractionRaycast();
+
+      renderer.render(scene, camera);
+
+      frameCount++;
+      fpsAccum += dt;
+      if (fpsAccum >= 0.4) {
+        const fps = Math.min(120, Math.round(frameCount / fpsAccum));
+        document.getElementById("fps-readout").textContent = fps + " FPS";
+        document.getElementById("pos-readout").textContent =
+          `X: ${camera.position.x.toFixed(1)} Y: ${camera.position.y.toFixed(1)} Z: ${camera.position.z.toFixed(1)}`;
+        frameCount = 0;
+        fpsAccum = 0;
+      }
+    }
+
+    window.addEventListener("load", initScene);
+  </script>
+</body>
+</html>
